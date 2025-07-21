@@ -15,70 +15,74 @@ module step_counter_limit (
     output reg    done
 );
 
-    // Estado cuadratura anterior
     reg [1:0] prev_state;
+    reg [1:0] prev_prev_state;
     wire [1:0] curr_state = {A, B};
 
-    // Contador de pasos
-    reg [15:0] step_count;
+    reg [15:0] counter;
+    reg [1:0] state_history [0:3];
+    integer state_index;
 
-    // Límite programable
-    reg [15:0] limit_reg;
+    // Dirección: 1 = CW, 0 = CCW
+    reg rotation_dir;
+    reg last_direction;
 
-    // Señal de paso detectado
-    wire step_up;
-    wire step_down;
+    function is_full_rotation;
+        input [1:0] s0, s1, s2, s3;
+        begin
+            is_full_rotation = (
+                (s0 == 2'b00 && s1 == 2'b01 && s2 == 2'b11 && s3 == 2'b10) || // CW
+                (s0 == 2'b00 && s1 == 2'b10 && s2 == 2'b11 && s3 == 2'b01)    // CCW
+            );
+        end
+    endfunction
 
-    assign step_up   = ({prev_state, curr_state} == 4'b0001) ||
-                       ({prev_state, curr_state} == 4'b0111) ||
-                       ({prev_state, curr_state} == 4'b1110) ||
-                       ({prev_state, curr_state} == 4'b1000);
-
-    assign step_down = ({prev_state, curr_state} == 4'b0010) ||
-                       ({prev_state, curr_state} == 4'b0100) ||
-                       ({prev_state, curr_state} == 4'b1101) ||
-                       ({prev_state, curr_state} == 4'b1011);
+    function detect_direction;
+        input [1:0] s0, s1, s2, s3;
+        begin
+            if (s0 == 2'b00 && s1 == 2'b01 && s2 == 2'b11 && s3 == 2'b10)
+                detect_direction = 1; // CW
+            else if (s0 == 2'b00 && s1 == 2'b10 && s2 == 2'b11 && s3 == 2'b01)
+                detect_direction = 0; // CCW
+            else
+                detect_direction = last_direction; // No cambio válido
+        end
+    endfunction
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             prev_state <= 2'b00;
-            step_count <= 0;
-            limit_reg  <= 0;
-            done <= 0;
+            prev_prev_state <= 2'b00;
+            counter <= 0;
+            last_direction <= 1; // valor por defecto
+            state_index <= 0;
+            state_history[0] <= 2'b00;
+            state_history[1] <= 2'b00;
+            state_history[2] <= 2'b00;
+            state_history[3] <= 2'b00;
         end else begin
+            prev_prev_state <= prev_state;
             prev_state <= curr_state;
 
-            // Carga límite programado
-            if (load_limit)
-                limit_reg <= limit_in;
+            // Control de historial
+            state_history[state_index] <= curr_state;
+            if (state_index == 3)
+                state_index <= 0;
+            else
+                state_index <= state_index + 1;
 
-            // Actualiza contador
-            if (step_up && !done)
-                step_count <= step_count + 1;
-            else if (step_down && step_count > 0 && !done)
-                step_count <= step_count - 1;
+            // Giro completo detectado
+            if (curr_state == 2'b00 && is_full_rotation(state_history[0], state_history[1], state_history[2], state_history[3])) begin
+                rotation_dir = detect_direction(state_history[0], state_history[1], state_history[2], state_history[3]);
 
-            // Verifica si alcanzó el límite
-            if (step_count >= limit_reg && limit_reg != 0)
-                done <= 1;
-        end
-    end
+                // Reinicia si cambió de dirección
+                if (rotation_dir != last_direction)
+                    counter <= 1;
+                else
+                    counter <= counter + 1;
 
-    // Interfaz de lectura
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            data_out <= 8'h00;
-        end else if (cs && rd) begin
-            case (addr)
-                16'h0000: data_out <= step_count[7:0];     // LSB contador
-                16'h0001: data_out <= step_count[15:8];    // MSB contador
-                16'h0002: data_out <= limit_reg[7:0];      // LSB límite
-                16'h0003: data_out <= limit_reg[15:8];     // MSB límite
-                16'h0004: data_out <= {7'b0, done};        // Bit de estado "done"
-                default:  data_out <= 8'h00;
-            endcase
-        end else begin
-            data_out <= 8'bz;
+                last_direction <= rotation_dir;
+            end
         end
     end
 
