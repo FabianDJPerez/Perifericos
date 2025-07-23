@@ -2,32 +2,17 @@
 
 module tb_step_counter_limit;
 
-    reg clk;
-    reg rst_n;
-
-    // Bus
+    reg clk, rst_n;
+    reg A, B;
+    reg cs, rd;
     reg [15:0] addr;
-    reg cs;
-    reg rd;
     wire [7:0] data_out;
-
-    // Encoder
-    reg A;
-    reg B;
-
-    // Límite
     reg [15:0] limit_in;
     reg load_limit;
     wire done;
 
-    // Exponer contador y bandera de cambio de dirección
-    wire [15:0] counter_internal;
-    wire flag_direction_change;
-    assign counter_internal = uut.counter;
-    assign flag_direction_change = uut.flag_direction_change;
-
     // DUT
-    step_counter_limit uut (
+    step_counter_limit dut (
         .clk(clk),
         .rst_n(rst_n),
         .addr(addr),
@@ -41,59 +26,26 @@ module tb_step_counter_limit;
         .done(done)
     );
 
-    // Generador de reloj (100 MHz)
+    // Clock generator
     always #5 clk = ~clk;
 
-    // Simula una secuencia prolongada de A y B alternando direcciones
-    reg [1:0] step_sequence [0:3];
-    integer step_index = 0;
-    integer i;
-
-    initial begin
-        // Secuencia para CW: 00 → 01 → 11 → 10
-        step_sequence[0] = 2'b00;
-        step_sequence[1] = 2'b01;
-        step_sequence[2] = 2'b11;
-        step_sequence[3] = 2'b10;
-    end
-
-    task simulate_rotations;
-        input integer cycles;
-        input integer direction; // 1 = CW, 0 = CCW
+    // Tarea para simular un paso CW
+    task do_step_cw;
         begin
-            for (i = 0; i < cycles; i = i + 1) begin
-                if (direction) begin
-                    step_index = 0;
-                    repeat (4) begin
-                        {A, B} = step_sequence[step_index];
-                        #40;
-                        step_index = (step_index + 1) % 4;
-                    end
-                    {A, B} = 2'b00; #40;
-                end else begin
-                    step_index = 3;
-                    repeat (4) begin
-                        {A, B} = step_sequence[step_index];
-                        #40;
-                        step_index = (step_index - 1 + 4) % 4;
-                    end
-                    {A, B} = 2'b00; #40;
-                end
-            end
+            {A, B} = 2'b00; #100;
+            {A, B} = 2'b01; #100;
+            {A, B} = 2'b11; #100;
+            {A, B} = 2'b10; #100;
         end
     endtask
 
-    // Lectura de registro
-    task read_reg(input [15:0] address);
+    // Tarea para simular un paso CCW
+    task do_step_ccw;
         begin
-            addr = address;
-            cs = 1;
-            rd = 1;
-            #20;
-            $display("Lectura de addr %h: %h", address, data_out);
-            cs = 0;
-            rd = 0;
-            #20;
+            {A, B} = 2'b00; #100;
+            {A, B} = 2'b10; #100;
+            {A, B} = 2'b11; #100;
+            {A, B} = 2'b01; #100;
         end
     endtask
 
@@ -101,31 +53,58 @@ module tb_step_counter_limit;
         $dumpfile("counter_sim.vcd");
         $dumpvars(0, tb_step_counter_limit);
 
-        // Inicialización
         clk = 0;
         rst_n = 0;
-        A = 0; B = 0;
-        cs = 0; rd = 0;
-        addr = 0;
-        limit_in = 0;
+        cs = 0;
+        rd = 0;
+        addr = 16'h0000;
+        limit_in = 9;
         load_limit = 0;
+        A = 0; B = 0;
 
+        // Reset
+        #50; rst_n = 1;
+
+        // Cargar límite
+        #20; load_limit = 1;
+        #10; load_limit = 0;
+
+        // Hacer 12 pasos CW 
+        repeat (3) begin
+            do_step_cw();
+        end
+
+        // Leer bandera done
         #50;
+        addr = 16'h0004;
+        cs = 1; rd = 1;
+        #10;
+        $display("Done after CW: %b", data_out[0]);
+        cs = 0; rd = 0;
+
+        // Reset total para segunda prueba
+        #50;
+        rst_n = 0;
+        #20;
         rst_n = 1;
 
-        $display("\n--- Simulación prolongada con cambios de dirección ---");
+        // Cargar nuevo límite
+        limit_in = 12;
+        #20; load_limit = 1;
+        #10; load_limit = 0;
 
-        simulate_rotations(3, 1); // 3 giros CW
-        simulate_rotations(3, 0); // 3 giros CCW
-        simulate_rotations(3, 1); // 3 giros CW
+        // Hacer 20 pasos CCW 
+        repeat (5) do_step_ccw(); 
 
-        read_reg(16'h0005); // counter LSB
-        read_reg(16'h0006); // counter MSB
-        $display("Valor interno de counter: %d", counter_internal);
-        $display("Flag de cambio de dirección: %b", flag_direction_change);
 
-        $display("\nSimulación completa.");
-        #100;
+
+        // Leer bandera done
+        #50;
+        addr = 16'h0004;
+        cs = 1; rd = 1;
+        #10;
+        $display("Done after CCW: %b", data_out[0]);
+
         $finish;
     end
 
