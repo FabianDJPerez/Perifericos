@@ -138,7 +138,7 @@ module tb_full_system;
         read_encoder(16'h0002);
         read_encoder(16'h0003);
 
-        #500000; // Tiempo de espera final
+        #100000; // Tiempo de espera final
         $finish;
     end
 
